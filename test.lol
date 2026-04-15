@@ -1,8 +1,13 @@
 #HAI
 #MAEK PARAGRAF
-#IHAZ name #ITIZ Jesica #MKAY
+#IHAZ 
+name 
+#ITIZ 
+Jesica 
+#MKAY
 hello
 #LEMMESEE
-name #OIC
+name 
+#OIC
 #MKAY
 #KBYE

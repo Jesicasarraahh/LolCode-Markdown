@@ -41,6 +41,7 @@ impl SimpleLexicalAnalyzer {
             position: 0,
             current_build: String::new(),
             tokens: Vec::new(),
+            // longest tags first helps matching
             known_tags: vec![
                 "#GIMMEH ITALICS".to_string(),
                 "#GIMMEH TITLE".to_string(),
@@ -72,14 +73,6 @@ impl SimpleLexicalAnalyzer {
         }
     }
 
-    fn flush_text(&mut self) {
-        let text = self.current_build.trim().to_string();
-        if !text.is_empty() {
-            self.tokens.push(format!("TEXT:{}", text));
-        }
-        self.current_build.clear();
-    }
-
     fn matches_tag_ignore_case(&self, tag: &str) -> bool {
         let tag_chars: Vec<char> = tag.chars().collect();
 
@@ -95,6 +88,14 @@ impl SimpleLexicalAnalyzer {
         }
 
         true
+    }
+
+    fn flush_text(&mut self) {
+        let text = self.current_build.trim().to_string();
+        if !text.is_empty() {
+            self.tokens.push(format!("TEXT:{}", text));
+        }
+        self.current_build.clear();
     }
 
     fn read_tag(&mut self) -> Result<(), String> {
@@ -122,6 +123,7 @@ impl SimpleLexicalAnalyzer {
             } else {
                 let ch = self.get_char();
 
+                // professor said these can be assumed not to appear
                 if ch == '<' || ch == '>' || ch == '&' {
                     return Err(format!(
                         "Lexical error at character {}: invalid character '{}'",
@@ -135,15 +137,8 @@ impl SimpleLexicalAnalyzer {
         }
 
         self.flush_text();
-        self.tokens.reverse();
+        self.tokens.reverse(); // so pop() reads in original order
         Ok(())
-    }
-
-    pub fn print_tokens(&self) {
-        println!("Tokens found:");
-        for token in self.tokens.iter().rev() {
-            println!("{}", token);
-        }
     }
 }
 
@@ -174,7 +169,7 @@ pub struct LolcodeCompiler {
     lexer: SimpleLexicalAnalyzer,
     current_tok: String,
     variables: HashMap<String, String>,
-    output: String,
+    pub output: String,
 }
 
 impl LolcodeCompiler {
@@ -216,17 +211,25 @@ impl LolcodeCompiler {
 
     fn text_value(&self) -> String {
         if self.current_tok.starts_with("TEXT:") {
-            self.current_tok[5..].to_string()
+            self.current_tok[5..].trim().to_string()
         } else {
             String::new()
         }
     }
 
+    fn emit_text(&mut self, s: &str) {
+        self.output.push_str(s);
+    }
+
+    fn emit_text_with_space(&mut self, s: &str) {
+        self.output.push_str(s);
+        self.output.push(' ');
+    }
+
     fn text(&mut self) {
         if self.is_text_token() {
             let val = self.text_value();
-            self.output.push_str(&val);
-            self.output.push(' ');
+            self.emit_text_with_space(&val);
             self.next_token();
         } else {
             eprintln!("Syntax error: expected TEXT, but found '{}'.", self.current_tok);
@@ -235,13 +238,12 @@ impl LolcodeCompiler {
     }
 
     fn program(&mut self) {
-        self.output.push_str("<html>\n");
-
         if !self.current_tok.eq_ignore_ascii_case("#HAI") {
             eprintln!("Syntax error: program must start with #HAI.");
             process::exit(1);
         }
 
+        self.emit_text("<html>\n");
         self.expect("#HAI");
         self.body();
 
@@ -260,7 +262,7 @@ impl LolcodeCompiler {
             process::exit(1);
         }
 
-        self.output.push_str("</html>\n");
+        self.emit_text("</html>\n");
     }
 
     fn body(&mut self) {
@@ -300,37 +302,51 @@ impl LolcodeCompiler {
 
     fn comment(&mut self) {
         self.expect("#OBTW");
+
+        if !self.is_text_token() {
+            eprintln!("Syntax error: expected comment text, found '{}'.", self.current_tok);
+            process::exit(1);
+        }
+
         let comment_text = self.text_value();
-        self.output.push_str("<!-- ");
-        self.output.push_str(&comment_text);
-        self.output.push_str(" -->\n");
+        self.emit_text("<!-- ");
+        self.emit_text(&comment_text);
+        self.emit_text(" -->\n");
+
         self.next_token();
         self.expect("#TLDR");
     }
 
     fn head(&mut self) {
         self.expect("#MAEK HEAD");
-        self.output.push_str("<head>\n");
+        self.emit_text("<head>\n");
         self.title();
-        self.output.push_str("</head>\n");
+        self.emit_text("</head>\n");
         self.expect("#MKAY");
     }
 
     fn title(&mut self) {
         self.expect("#GIMMEH TITLE");
-        self.output.push_str("<title>");
+
+        if !self.is_text_token() {
+            eprintln!("Syntax error: expected title text, found '{}'.", self.current_tok);
+            process::exit(1);
+        }
+
         let title_text = self.text_value();
-        self.output.push_str(&title_text);
+        self.emit_text("<title>");
+        self.emit_text(&title_text);
+        self.emit_text("</title>\n");
+
         self.next_token();
-        self.output.push_str("</title>\n");
         self.expect("#OIC");
     }
 
     fn paragraph(&mut self) {
         self.expect("#MAEK PARAGRAF");
-        self.output.push_str("<p>");
+        self.emit_text("<p>");
         self.paragraph_body();
-        self.output.push_str("</p>\n");
+        self.emit_text("</p>\n");
         self.expect("#MKAY");
     }
 
@@ -364,39 +380,50 @@ impl LolcodeCompiler {
         } else if self.current_tok.eq_ignore_ascii_case("#LEMMESEE") {
             self.variable_usage();
         } else {
-            eprintln!(
-                "Syntax error: invalid paragraph item '{}'.",
-                self.current_tok
-            );
+            eprintln!("Syntax error: invalid paragraph item '{}'.", self.current_tok);
             process::exit(1);
         }
     }
 
     fn bold(&mut self) {
         self.expect("#GIMMEH BOLD");
-        self.output.push_str("<b>");
+
+        if !self.is_text_token() {
+            eprintln!("Syntax error: expected bold text, found '{}'.", self.current_tok);
+            process::exit(1);
+        }
+
         let bold_text = self.text_value();
-        self.output.push_str(&bold_text);
+        self.emit_text("<b>");
+        self.emit_text(&bold_text);
+        self.emit_text("</b>");
+
         self.next_token();
-        self.output.push_str("</b>");
         self.expect("#OIC");
     }
 
     fn italics(&mut self) {
         self.expect("#GIMMEH ITALICS");
-        self.output.push_str("<i>");
+
+        if !self.is_text_token() {
+            eprintln!("Syntax error: expected italics text, found '{}'.", self.current_tok);
+            process::exit(1);
+        }
+
         let italics_text = self.text_value();
-        self.output.push_str(&italics_text);
+        self.emit_text("<i>");
+        self.emit_text(&italics_text);
+        self.emit_text("</i>");
+
         self.next_token();
-        self.output.push_str("</i>");
         self.expect("#OIC");
     }
 
     fn list(&mut self) {
         self.expect("#MAEK LIST");
-        self.output.push_str("<ul>\n");
+        self.emit_text("<ul>\n");
         self.item_list();
-        self.output.push_str("</ul>\n");
+        self.emit_text("</ul>\n");
         self.expect("#MKAY");
     }
 
@@ -413,9 +440,9 @@ impl LolcodeCompiler {
 
     fn item(&mut self) {
         self.expect("#GIMMEH ITEM");
-        self.output.push_str("<li>");
+        self.emit_text("<li>");
         self.item_content();
-        self.output.push_str("</li>\n");
+        self.emit_text("</li>\n");
         self.expect("#OIC");
     }
 
@@ -447,21 +474,24 @@ impl LolcodeCompiler {
 
     fn newline_tag(&mut self) {
         self.expect("#NEWLINE");
-        self.output.push_str("<br>\n");
+        self.emit_text("<br>\n");
     }
 
     fn link(&mut self) {
         self.expect("#GIMMEH LINX");
 
         if !self.is_text_token() {
-            eprintln!("Syntax error: expected address text after #GIMMEH LINX, found '{}'.", self.current_tok);
+            eprintln!(
+                "Syntax error: expected address text after #GIMMEH LINX, found '{}'.",
+                self.current_tok
+            );
             process::exit(1);
         }
 
         let address = self.text_value();
-        self.output.push_str(&format!("<a href=\"{0}\">{0}</a>", address));
-        self.next_token();
+        self.emit_text(&format!("<a href=\"{0}\">{0}</a>", address));
 
+        self.next_token();
         self.expect("#OIC");
     }
 
@@ -518,9 +548,9 @@ impl LolcodeCompiler {
             process::exit(1);
         }
 
-        let value = self.variables.get(&var_name).unwrap();
-        self.output.push_str(value);
-        self.output.push(' ');
+        let value = self.variables.get(&var_name).unwrap().clone();
+        self.emit_text_with_space(&value);
+
         self.next_token();
         self.expect("#OIC");
     }
@@ -555,8 +585,10 @@ impl Compiler for LolcodeCompiler {
 
     fn parse(&mut self) {
         self.program();
-        println!("Syntax analysis completed successfully.\n");
-        println!("Generated HTML:\n{}", self.output);
+        println!("Syntax analysis completed successfully.");
+
+        let cleaned = self.output.replace(" </p>", "</p>");
+        self.output = cleaned;
     }
 
     fn current_token(&self) -> String {
@@ -591,4 +623,13 @@ fn main() {
     let mut compiler = LolcodeCompiler::new();
     compiler.compile(&source);
     compiler.parse();
+
+    let output_filename = filename.replace(".lol", ".html");
+
+    fs::write(&output_filename, &compiler.output).unwrap_or_else(|err| {
+        eprintln!("Error writing HTML file '{}': {}", output_filename, err);
+        process::exit(1);
+    });
+
+    println!("HTML file generated successfully: {}", output_filename);
 }
